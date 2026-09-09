@@ -207,6 +207,7 @@ magic-api-security-audit/
     ├── poc_f05_push_ssrf.py            # F-05 /push SSRF
     ├── poc_f06_static_token.py         # F-06 静态 MD5 token / 登出无效
     ├── poc_f07_sign_replay.py          # F-07 receivePush 签名重放
+    ├── exploit_f07_push_rce.py          # F-07 完整利用链: 无token RCE (鉴权后仍可用)
     ├── poc_f08_cors.sh                 # F-08 CORS 反射验证
     └── poc_f09_classpath_enum.py       # F-09 类路径枚举 (鉴权后仍可达)
 ```
