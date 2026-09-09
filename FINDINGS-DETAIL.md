@@ -444,9 +444,11 @@ public void logout(String token) {
 
 ---
 
-## F-07 — 推送接收接口签名无时效校验，可重放实现工作区整体替换
+## F-07 — 推送接收接口签名无时效校验：鉴权开启后仍可未授权注入持久化 RCE 后门
 
-**Severity:** MEDIUM  |  **Likelihood:** low  |  **Impact:** high  |  **Confidence:** high
+**Severity:** CRITICAL  |  **Likelihood:** medium  |  **Impact:** high  |  **Confidence:** high
+
+> **升级说明（v2 实测）**：原评级 MEDIUM（仅重放/DoS）。鉴权模式动态验证后升级为 CRITICAL —— 攻击者仅需知道 `secret-key`（与登录密码独立），无需登录 token，即可构造 zip 通过 `receivePush` 注入任意 API 脚本并触发 RCE，后门持久化重启存活。
 
 ### 描述
 
@@ -474,36 +476,45 @@ MagicWorkbenchController.receivePush 只验证签名等值而未验证 timestamp
 
 ### 复现
 
-**攻击者视角：** 能截获/读取一次节点间推送流量的中间人或日志读取者。
+**攻击者视角：** 仅需知道 `secret-key`（集群同步密钥，与登录密码独立），无需截获任何流量。
 
-**步骤：**
+**动态实测（magic-api v2.2.2，`secret-key=test-secret-key-123`，开启鉴权 admin/Admin@123456）：**
 
-1. 截获一次合法推送（或从日志/代理获取）。
-2. 原样重放 POST 请求，服务器接受并执行 upload(FULL)。
+1. 构造 zip：`api/pwn/group.json` + `api/pwn/evil.ms`（含 `import java.lang.ProcessBuilder` RCE 脚本），**必须包含显式目录条目**（`api/`、`api/pwn/`）—— `ZipResource.dirs()` 仅识别 `endsWith("/")` 条目，漏加则静默 no-op。
+2. ms 格式 = JSON body + `\r\n================================\r\n` + script（`MagicResourceStorage.separatorWithCRLF`）。
+3. `sign = MD5(timestamp|full|MD5(zipBytes)|secretKey)`，timestamp 取当前毫秒。
+4. `POST /_magic-api-sync` multipart，file=zip，mode=full，timestamp，sign，**无 token header**。
+5. 服务器：upload(full=true) → root.delete() 清空全部旧 API → 写入 zip 内容 → 注册新 API。
+6. `GET /pwn/evil` → `uid=0(root) gid=0(root) groups=0(root)`。
+7. 重启容器后 `GET /pwn/evil` 仍返回 `uid=0(root)` → **重启存活持久化后门**。
 
-**Payload：**
+**关键工具：** `scripts/exploit_f07_push_rce.py`（一键利用脚本，支持自定义命令）
 
 ```
-重放完整 multipart POST /_magic-api-sync（timestamp、mode=FULL、sign、file 均用截获值）
+# 用法
+python3 exploit_f07_push_rce.py http://target:9999 <secretKey> "id; cat /etc/shadow"
 ```
-
-**预期结果：** 工作区被回滚为截获时的内容（全量删除+写入），重复重放可持续压制；可用性破坏与后门持久化。
 
 ### 评级理由
 
-- Likelihood (low): 仅当集成方配置 magic-api.secret-key（非空）时 receivePush 才注册；且攻击者需先截获一次合法推送流量（含 timestamp+sign）。
-- Impact (high): 重放历史合法推送包即可以 FULL 模式删除并替换整个工作区；配合 F1/F3 获取的旧脚本内容亦可构造签名（secretKey 除外），但签名依赖 secretKey，纯重放即可造成可用性破坏。
-- Confidence (high): receivePush 源码明确仅做 sign.equals(SignUtils.sign(timestamp, secretKey, mode, bytes)) 等值校验，未比较 timestamp 与当前时间；SignUtils.sign 结构可读。
+- Likelihood (medium): 集群部署通常配置 secret-key（否则 receivePush 不注册），secret-key 常用弱值（短/可猜）；不需要截获流量，攻击者可自行构造。
+- Impact (high): 鉴权模式下绕过 DefaultAuthorizationInterceptor，未登录即注入持久化 RCE 脚本；uid=0(root) 等级命令执行。
+- Confidence (high): 动态实测验证完整利用链：注入 → 触发 → 重启存活。
 
 ### 修复建议
 
-校验 timestamp 与服务器时间差（如 ±5 分钟）并缓存已见 sign 防重放；对 secretKey 长度/复杂度做强制校验。
+1. **secretKey 强度强制**：长度 ≥32、拒绝已知弱值。
+2. **时间戳新鲜度**：差值 >5min 拒绝（现有 sign 本身包含 timestamp，加上时效不增加复杂度）。
+3. **防重放**：Caffeine/TTL Set 缓存已见 sign，重复提交拒绝。
+4. **receivePush 鉴权分离**：考虑对 receivePush 额外要求管理 token（双重认证），或限制 IP 白名单。
+5. **ms 文件完整性**：解析时校验 groupId 匹配、script 非空等，防止注入畸形实体。
 
 `magic-api/src/main/java/org/ssssssss/magicapi/core/web/MagicWorkbenchController.java`
 
 ```java
+// 新增: timestamp 新鲜度 + 防重放
 isTrue(Math.abs(System.currentTimeMillis() - timestamp) < TimeUnit.MINUTES.toMillis(5), SIGN_IS_INVALID);
-isTrue(seenSigns.addIfAbsent(sign), SIGN_IS_INVALID); // 例如 Caffeine/Set + TTL
+if (!seenSigns.add(sign)) throw new MagicMessageException("sign 重放");
 isTrue(sign.equals(SignUtils.sign(timestamp, secretKey, mode, bytes)), SIGN_IS_INVALID);
 ```
 

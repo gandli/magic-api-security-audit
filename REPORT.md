@@ -13,11 +13,13 @@ magic-api 是一个低代码 API 构建平台，核心功能是通过 Web 工作
 
 | Severity | Count |
 |----------|-------|
-| CRITICAL | 1 |
+| CRITICAL | 2 |
 | HIGH     | 3 |
-| MEDIUM   | 3 |
+| MEDIUM   | 2 |
 | LOW      | 1 |
 | **Total**| **8** |
+
+> **v2 更新**：鉴权模式动态验证后，F-07 从 MEDIUM 升级为 CRITICAL（receivePush 无需登录 token，已知 secretKey 即可注入持久化 RCE 后门）；新增 F-09 未授权类路径枚举（MEDIUM，见 reproduction/AUTH-MODE.md）。
 
 ---
 
@@ -31,8 +33,9 @@ magic-api 是一个低代码 API 构建平台，核心功能是通过 Web 工作
 | F-04 | 未认证备份导出与全量回滚：可读全部脚本并可覆写工作区 | HIGH |
 | F-05 | 工作台 /push 接口允许 SSRF：攻击者控制 RestTemplate 目标地址 | MEDIUM |
 | F-06 | 认证令牌为无盐静态 MD5、永不过期、登出无失效 | MEDIUM |
-| F-07 | 推送接收接口签名无时效校验，可重放实现工作区整体替换 | MEDIUM |
+| F-07 | 推送接收接口鉴权后仍可未授权注入持久化 RCE 后门（原：签名无时效校验） | **CRITICAL** ⬆ |
 | F-08 | CORS 反射任意 Origin 并允许携带凭证（工作台路径） | LOW |
+| F-09 | 未授权类路径枚举（/classes.txt, /classes），鉴权后仍可达（AUTH-MODE.md） | MEDIUM |
 
 ---
 
