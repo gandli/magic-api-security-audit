@@ -24,6 +24,7 @@
 - [漏洞列表](#漏洞列表)
 - [环境快速开始](#环境快速开始)
 - [复现手册](#复现手册)
+- [鉴权模式攻击面](#鉴权模式攻击面)
 - [仓库结构](#仓库结构)
 - [修复建议](#修复建议)
 - [贡献者](#贡献者)
@@ -109,6 +110,14 @@
       <td>待分配</td>
       <td>✅ 动态确认</td>
     </tr>
+    <tr>
+      <td align="center"><strong>F-09</strong></td>
+      <td><img src="https://img.shields.io/badge/MEDIUM-yellow?style=flat-square" alt="MEDIUM"></td>
+      <td>未授权类路径枚举（鉴权后仍可达）</td>
+      <td>5.3</td>
+      <td>待分配</td>
+      <td>✅ 动态确认</td>
+    </tr>
   </tbody>
 </table>
 
@@ -165,6 +174,15 @@ daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
 - F-01 RCE 动态复现记录 (`uid=0` 输出)
 - 接口可达性验证（F-02~F-08）
 
+## 鉴权模式攻击面
+
+即使配置了 `magic-api.security.username/password`，仍有可利用面，详见 **[AUTH-MODE.md](./reproduction/AUTH-MODE.md)**：
+
+- **F-07 增强**: `receivePush` (`/_magic-api-sync`) 使用 `@Valid(requireLogin=false)`，无 token 也能 `mode=full` 全量覆盖工作区
+- **F-09**: `/classes.txt` + `/classes` 泄露完整 classpath（2298 类，含 8 个 RCE gadget）
+- **F-06**: token = `MD5(username\|\|password)` 可离线预计算，`logout` 无吊销效果
+- 其余写端点（save/jdbc/push/backups）鉴权后需要 token（HTTP 200 + `code:401`）
+
 ---
 
 ## 仓库结构
@@ -178,7 +196,8 @@ magic-api-security-audit/
 ├── findings.json                       # 结构化漏洞数据 (8 条, 校验通过)
 ├── FINDINGS-DETAIL.md                  # 8 条漏洞详情 (按严重性降序)
 ├── reproduction/
-│   └── REPRODUCTION.md                 # 复现手册 (Docker + PoC curl)
+│   ├── REPRODUCTION.md                 # 复现手册 (Docker + PoC curl)
+│   └── AUTH-MODE.md                    # 鉴权模式攻击面 (F-06/07/08/09)
 └── scripts/
     ├── build_and_run.sh                # 一键搭建复现环境
     ├── exploit_f01_rce.py              # F-01 未授权 RCE 利用脚本
@@ -188,7 +207,8 @@ magic-api-security-audit/
     ├── poc_f05_push_ssrf.py            # F-05 /push SSRF
     ├── poc_f06_static_token.py         # F-06 静态 MD5 token / 登出无效
     ├── poc_f07_sign_replay.py          # F-07 receivePush 签名重放
-    └── poc_f08_cors.sh                 # F-08 CORS 反射验证
+    ├── poc_f08_cors.sh                 # F-08 CORS 反射验证
+    └── poc_f09_classpath_enum.py       # F-09 类路径枚举 (鉴权后仍可达)
 ```
 
 ---
