@@ -172,6 +172,7 @@ daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
 ```
 magic-api-security-audit/
 ├── README.md                           # 本文档
+├── LICENSE                             # MIT
 ├── REPORT.md                           # 审计报告 (执行摘要 + 修复建议)
 ├── architecture.md                     # 代码结构与调用链分析
 ├── findings.json                       # 结构化漏洞数据 (8 条, 校验通过)
@@ -180,7 +181,14 @@ magic-api-security-audit/
 │   └── REPRODUCTION.md                 # 复现手册 (Docker + PoC curl)
 └── scripts/
     ├── build_and_run.sh                # 一键搭建复现环境
-    └── exploit_f01_rce.py              # F-01 未授权 RCE 利用脚本
+    ├── exploit_f01_rce.py              # F-01 未授权 RCE 利用脚本
+    ├── poc_f02_jdbc_ssrf.py            # F-02 JDBC SSRF 探测
+    ├── poc_f03_source_disclosure.py    # F-03 源码泄露
+    ├── poc_f04_backup.py               # F-04 备份导出/回滚 (回滚需 --rollback)
+    ├── poc_f05_push_ssrf.py            # F-05 /push SSRF
+    ├── poc_f06_static_token.py         # F-06 静态 MD5 token / 登出无效
+    ├── poc_f07_sign_replay.py          # F-07 receivePush 签名重放
+    └── poc_f08_cors.sh                 # F-08 CORS 反射验证
 ```
 
 ---

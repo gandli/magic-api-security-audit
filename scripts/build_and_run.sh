@@ -34,6 +34,11 @@ cat > "$DIR/env/pom.xml" <<'POM'
     <dependency><groupId>org.springframework.boot</groupId><artifactId>spring-boot-starter-web</artifactId></dependency>
     <dependency><groupId>org.ssssssss</groupId><artifactId>magic-api-spring-boot-starter</artifactId><version>2.2.2</version></dependency>
   </dependencies>
+  <build>
+    <plugins>
+      <plugin><groupId>org.springframework.boot</groupId><artifactId>spring-boot-maven-plugin</artifactId></plugin>
+    </plugins>
+  </build>
 </project>
 POM
 
