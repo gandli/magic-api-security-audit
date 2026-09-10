@@ -21,6 +21,7 @@
 
 ## 目录
 
+- [部署场景对比](#部署场景对比)
 - [漏洞列表](#漏洞列表)
 - [环境快速开始](#环境快速开始)
 - [复现手册](#复现手册)
@@ -29,6 +30,29 @@
 - [修复建议](#修复建议)
 - [贡献者](#贡献者)
 - [免责声明](#免责声明)
+
+---
+
+## 部署场景对比
+
+两种部署形态的攻击面差异——**开启鉴权仅修复了 5/9 项**：
+
+| ID | 漏洞 | 默认（无鉴权） | 已开启鉴权 |
+|----|------|:---:|:---:|
+| F-01 | 未授权 RCE | 🔴 **可直接利用** | 🟢 需 token（但见 F-06） |
+| F-02 | JDBC SSRF/RCE | 🔴 **可直接利用** | 🟢 需 token |
+| F-03 | 脚本源码泄露 | 🔴 **可直接利用** | 🟢 需 token |
+| F-04 | 备份导出/回滚 | 🔴 **可直接利用** | 🟢 需 token |
+| F-05 | /push SSRF | 🟡 可利用 | 🟢 需 token |
+| F-06 | 静态 MD5 token | ⚪ 不适用（无鉴权时） | 🔴 **密码泄露/猜测即可离线算 token，登出无效** |
+| F-07 | receivePush RCE 注入 | 🔴 **可利用（需知道 secret-key）** | 🔴 **仍可利用——@Valid(requireLogin=false) 绕过登录，已知 secret-key 即可注入持久化 RCE 后门** |
+| F-08 | CORS 反射 | 🟡 可读响应 | 🔴 **仍可反射任意 Origin（泄露风险）** |
+| F-09 | 类路径枚举 | 🔴 **可直接利用** | 🔴 **仍可利用——2298 类 + 8 个 RCE gadget 无 token 可取** |
+
+**结论**：
+
+- **场景 A（默认无鉴权）**：任何能访问 HTTP 端口的攻击者直接获得 RCE（F-01），完整攻击链已动态复现。
+- **场景 B（已开启鉴权）**：仅配置 username/password **不足以止血**——攻击者可用 F-07（secret-key 已知时直接未授权 RCE）或 F-06（已知密码离线算 token 后走 F-01 链），并用 F-09 为 RCE 链侦察。场景 B 复现记录见 [AUTH-MODE.md](./reproduction/AUTH-MODE.md)。
 
 ---
 
@@ -96,11 +120,11 @@
     </tr>
     <tr>
       <td align="center"><strong>F-07</strong></td>
-      <td><img src="https://img.shields.io/badge/MEDIUM-yellow?style=flat-square" alt="MEDIUM"></td>
-      <td>receivePush 签名重放</td>
-      <td>5.9</td>
+      <td><img src="https://img.shields.io/badge/CRITICAL-red?style=flat-square" alt="CRITICAL"></td>
+      <td>receivePush 未授权持久化 RCE（鉴权模式下仍可达）</td>
+      <td>9.8</td>
       <td>待分配</td>
-      <td>◐ 逻辑静态确认</td>
+      <td>✅ 动态确认（无token注入→uid=0）</td>
     </tr>
     <tr>
       <td align="center"><strong>F-08</strong></td>
@@ -113,10 +137,10 @@
     <tr>
       <td align="center"><strong>F-09</strong></td>
       <td><img src="https://img.shields.io/badge/MEDIUM-yellow?style=flat-square" alt="MEDIUM"></td>
-      <td>未授权类路径枚举（鉴权后仍可达）</td>
+      <td>未授权类路径枚举（鉴权模式下仍可达）</td>
       <td>5.3</td>
       <td>待分配</td>
-      <td>✅ 动态确认</td>
+      <td>✅ 动态确认（2298 类 + 8 gadget）</td>
     </tr>
   </tbody>
 </table>
@@ -165,20 +189,21 @@ daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
 
 ---
 
-## 复现手册
+## 复现手册（场景 A：默认无鉴权）
 
 各漏洞详细复现步骤、请求构造与验证方法见 **[REPRODUCTION.md](./reproduction/REPRODUCTION.md)**，包含:
 
 - 完整 Docker 环境搭建 (Dockerfile + pom.xml + application.properties)
-- 8 个漏洞的 curl 构造示例
+- 9 个漏洞的 curl 构造示例
 - F-01 RCE 动态复现记录 (`uid=0` 输出)
+- F-07 无token注入zip→RCE 完整链路
 - 接口可达性验证（F-02~F-08）
 
-## 鉴权模式攻击面
+## 鉴权模式攻击面（场景 B：已开启鉴权）
 
 即使配置了 `magic-api.security.username/password`，仍有可利用面，详见 **[AUTH-MODE.md](./reproduction/AUTH-MODE.md)**：
 
-- **F-07 增强**: `receivePush` (`/_magic-api-sync`) 使用 `@Valid(requireLogin=false)`，无 token 也能 `mode=full` 全量覆盖工作区
+- **F-07 升级（CRITICAL）**: `receivePush` (`/_magic-api-sync`) 使用 `@Valid(requireLogin=false)`，无 token 也能 `mode=full` 全量覆盖工作区并注入任意脚本 → **未授权 RCE，后门重启存活**（`scripts/exploit_f07_push_rce.py`）
 - **F-09**: `/classes.txt` + `/classes` 泄露完整 classpath（2298 类，含 8 个 RCE gadget）
 - **F-06**: token = `MD5(username\|\|password)` 可离线预计算，`logout` 无吊销效果
 - 其余写端点（save/jdbc/push/backups）鉴权后需要 token（HTTP 200 + `code:401`）
@@ -193,11 +218,11 @@ magic-api-security-audit/
 ├── LICENSE                             # MIT
 ├── REPORT.md                           # 审计报告 (执行摘要 + 修复建议)
 ├── architecture.md                     # 代码结构与调用链分析
-├── findings.json                       # 结构化漏洞数据 (8 条, 校验通过)
-├── FINDINGS-DETAIL.md                  # 8 条漏洞详情 (按严重性降序)
+├── findings.json                       # 结构化漏洞数据 (9 条, 校验通过)
+├── FINDINGS-DETAIL.md                  # 9 条漏洞详情 (按严重性降序)
 ├── reproduction/
-│   ├── REPRODUCTION.md                 # 复现手册 (Docker + PoC curl)
-│   └── AUTH-MODE.md                    # 鉴权模式攻击面 (F-06/07/08/09)
+│   ├── REPRODUCTION.md                 # 场景A复现手册: 默认无鉴权 (Docker + PoC curl)
+│   └── AUTH-MODE.md                    # 场景B复现手册: 已开启鉴权 (F-06/07/08/09)
 └── scripts/
     ├── build_and_run.sh                # 一键搭建复现环境
     ├── exploit_f01_rce.py              # F-01 未授权 RCE 利用脚本
