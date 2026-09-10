@@ -1,12 +1,12 @@
 <p align="center">
   <a href="https://github.com/gandli/magic-api-security-audit">
-    <img src="https://capsule-render.vercel.app/api?type=waving&color=0:0D1117,50:C9D1D9,100:0D1117&height=200&section=header&text=magic-api%20Security%20Audit&fontSize=32&fontColor=C9D1D9&fontAlignY=35&desc=magic-api%20v2.2.2%20未授权%20RCE%20%26%20多漏洞代码审计&descSize=14&descAlignY=55&descAlign=50&animation=fadeIn" alt="magic-api Security Audit">
+    <img src="./assets/banner.svg" alt="magic-api Security Audit">
   </a>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/version-v2.2.2-C9D1D9?style=flat-square&labelColor=0D1117" alt="version">
-  <img src="https://img.shields.io/badge/findings-8%20%281C%203H%203M%201L%29-C9D1D9?style=flat-square&labelColor=0D1117" alt="findings">
+  <img src="https://img.shields.io/badge/findings-9%20%282C%203H%202M%201L%29-C9D1D9?style=flat-square&labelColor=0D1117" alt="findings">
   <img src="https://img.shields.io/badge/status-dynamically%20confirmed-F85149?style=flat-square&labelColor=0D1117" alt="status">
   <img src="https://img.shields.io/badge/license-MIT-C9D1D9?style=flat-square&labelColor=0D1117" alt="license">
   <img src="https://img.shields.io/badge/java-8%2B-C9D1D9?style=flat-square&labelColor=0D1117" alt="java">
@@ -15,7 +15,7 @@
 ---
 
 > 本仓库收录针对 [magic-api](https://github.com/ssssssss-team/magic-api) v2.2.2 的完整代码审计研究。
-> 包含 **8 个可利用漏洞**（1 Critical / 3 High / 3 Medium / 1 Low），全部具备代码级调用链追踪与 HTTP PoC。其中 F-01（未授权 RCE）已在 Docker 复现环境中获得 `uid=0(root)` 命令执行输出。
+> 包含 **9 个可利用漏洞**（2 Critical / 3 High / 2 Medium / 1 Low），全部具备代码级调用链追踪与 HTTP PoC。其中 F-01（未授权 RCE）已在 Docker 复现环境中获得 `uid=0(root)` 命令执行输出。
 
 ---
 
